@@ -15,12 +15,12 @@ import {isError} from '../../sdk/block-engine/utils';
 const MEMO_PROGRAM_ID = 'Memo1UhkJRfHyvLMcVucJwxXeuD728EqVDDwQDxFMNo';
 
 export const sendBundles = async (
-  c: SearcherClient,
+  clients: SearcherClient[],
   bundleTransactionLimit: number,
   keypair: Keypair,
   conn: Connection
 ) => {
-  const _tipAccount = (await c.getTipAccounts())[0];
+  const _tipAccount = (await clients[0].getTipAccounts())[0];
   console.log('tip account:', _tipAccount);
   const tipAccount = new PublicKey(_tipAccount);
 
@@ -28,13 +28,30 @@ export const sendBundles = async (
   console.log('current account has balance: ', balance);
 
   let isLeaderSlot = false;
+  let client: SearcherClient = clients[0];
+
   while (!isLeaderSlot) {
-    const next_leader = await c.getNextScheduledLeader();
-    const num_slots = next_leader.nextLeaderSlot - next_leader.currentSlot;
-    isLeaderSlot = num_slots <= 2;
-    console.log(`next jito leader slot in ${num_slots} slots`);
+    isLeaderSlot = false;
+    for (const c of clients) {
+      const next_leader = await c.getNextScheduledLeader();
+      const num_slots = next_leader.nextLeaderSlot - next_leader.currentSlot;
+      console.log(`next jito leader slot in ${num_slots} slots`);
+      isLeaderSlot = num_slots <= 2;
+      if (isLeaderSlot) {
+        client = c;
+        break;
+      }
+    }
+    console.log('waiting for leader slot...');
     await new Promise(r => setTimeout(r, 500));
   }
+
+  // while (!isLeaderSlot) {
+  //   const next_leader = await clients.getNextScheduledLeader();
+  //   const num_slots = next_leader.nextLeaderSlot - next_leader.currentSlot;
+  //   isLeaderSlot = num_slots <= 2;
+  //   console.log(`next jito leader slot in ${num_slots} slots`);
+  // }
 
   const blockHash = await conn.getLatestBlockhash();
   const b = new Bundle([], bundleTransactionLimit);
@@ -53,7 +70,7 @@ export const sendBundles = async (
 
   maybeBundle = maybeBundle.addTipTx(
     keypair,
-    100_000,
+    110_000,
     tipAccount,
     blockHash.blockhash
   );
@@ -64,15 +81,19 @@ export const sendBundles = async (
 
   bundles.map(async b => {
     try {
-      const resp = await c.sendBundle(b);
+      const resp = await client.sendBundle(b);
       console.log('resp:', resp);
     } catch (e) {
       console.error('error sending bundle:', e);
     }
   });
+
+  console.log('return from sendBundles');
+  return client;
 };
 
 export const onBundleResult = (c: SearcherClient) => {
+  console.log('onBundleResult');
   c.onBundleResult(
     result => {
       console.log('received bundle result:', result);
@@ -81,6 +102,7 @@ export const onBundleResult = (c: SearcherClient) => {
       throw e;
     }
   );
+  console.log('onBundleResult done');
 };
 
 const buildMemoTransaction = (
